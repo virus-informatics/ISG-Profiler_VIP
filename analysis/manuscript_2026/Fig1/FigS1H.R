@@ -2,179 +2,265 @@ rm( list=ls(all=TRUE) ) # clean up R workspace
 ##load package
 library("tidyverse")
 library("ggplot2")
-library(MASS)
-library(viridis)
-library(pheatmap) 
-library(reshape2)
-library(ggpubr)
+library("dplyr")
 
-ISGcntl_sal_RPM <- read.table("sp10_240801ref_ISGcntl_forin.txt", header = T, sep = "\t")
 
-# ロング形式に変換
-ISG_long <- ISGcntl_sal_RPM %>%
-  filter(type == "ISG") %>%
-  pivot_longer(cols = c(norm_kallisto, norm_kma, norm_salmon, norm_star_ort, norm_bowtie), names_to = "method", values_to = "normalized_value") %>%
-  mutate(method = str_remove(method, "^norm_")) %>%
-  mutate(reads_log = log2(normalized_value*(10E+5)+1))
+#import data
+ISG_meta <- read.table("Aves_Mam_mbio_250613_ISGscore_logan.txt", header = T, sep = "\t")
+amniota_list <- read.table("Amniota399_sp_id.list", sep = "\t", header = T)
+library(taxize)
+Sys.setenv(ENTREZ_KEY = "hoge")
 
-# プロット（facetでツールごとに表示）
-p <- ggplot(ISG_long, aes(x = RPM_log, y = reads_log)) +
-  geom_point(aes(color = Induction), alpha = 0.7) +
-  geom_smooth(method = "lm", se = FALSE, linetype = "dashed", color = "gray40") +
-  stat_cor(method = "spearman", label.x = 0, label.y = 0.9, size = 3) +
-  facet_grid(species ~ method + Induction, scales = "free") +
-  theme_classic(base_size = 12) +
-  labs(
-    title = "Comparison of RPM_mean and normalized values across tools",
-    x = "RPM_mean (reference)",
-    y = "Normalized value"
+taxids <- unique(amniota_list$tax_id)
+
+# NCBI から階層情報を取得
+tax_class <- classification(taxids, db = "ncbi")
+
+# リストをデータフレーム化して genus, family, order だけ抽出
+tax_df <- bind_rows(lapply(names(tax_class), function(id) {
+  df <- tax_class[[id]]
+  if (is.null(df)) return(data.frame(tax_id = id, genus = NA, family = NA, order = NA))
+  tibble(
+    tax_id = as.integer(id),
+    genus  = df$name[df$rank == "genus"]  %||% NA,
+    family = df$name[df$rank == "family"] %||% NA,
+    order = df$name[df$rank == "order"] %||% NA
   )
-print(p)
+})) %>%
+  select(-tax_id) %>%
+  unique()
 
+Amni_ord <- tax_df %>%
+  select(order) %>%
+  unique() %>%
+  mutate(DB_ord = "YES")
 
-# 対象のデータをフィルタリング（method == "salmon"）
-salmon_data <- ISG_long %>%
+Amni_fam <- tax_df %>%
+  select(family) %>%
+  unique() %>%
+  mutate(DB_fam = "YES")
+
+Amni_gen <- tax_df %>%
+  select(genus) %>%
+  unique() %>%
+  mutate(DB_gen = "YES")
+
+ISG_meta_nonref <- ISG_meta %>%
+  anti_join(amniota_list, by = "tax_id")
+
+nonref_num <- ISG_meta_nonref %>%
+  group_by(species, Infection, genus, family, order) %>%
+  summarise(inf_num = n()) %>%
   ungroup() %>%
-  filter(method == "salmon") %>%
-  group_by(hum_symbol, species, Induction) %>%
-  summarise(RPM_mean = mean(RPM_log), sal_mean = mean(reads_log))
+  group_by(species, genus, family, order) %>%
+  summarise(
+    total_num = sum(inf_num, na.rm = TRUE),
+    pos_num   = sum(inf_num[Infection == "Positive"], na.rm = TRUE),
+    neg_num   = sum(inf_num[Infection == "Negative"], na.rm = TRUE),
+    infection_ratio = pos_num / total_num
+  ) %>%
+  ungroup()
 
-# アウトライアー遺伝子を指定
-outliers <- c("HLA-A", "HLA-B", "HLA-C", "HLA-E", "HLA-F", "HLA-G", "EIF2AK2", "RNF19B")
+amniota_list_mod <- amniota_list %>%
+  mutate(species = sub("^([^_]+_[^_]+).*", "\\1", species))
 
-# outlierかどうかの列を追加
-salmon_data <- salmon_data %>%
-  mutate(outlier_flag = ifelse(hum_symbol %in% outliers, "Outlier", "Normal"))
+include_list <- nonref_num %>%
+  filter(!str_detect(species, "_sp$")) %>%
+  filter(!str_detect(species, "_x_")) %>%
+  filter(!str_detect(species, "_sp._")) %>%
+  anti_join(amniota_list_mod, by = "species") %>%
+  mutate(genus = sub("^([^_]+).*", "\\1", species)) %>%
+  left_join(Amni_ord, by = "order") %>%
+  left_join(Amni_fam, by = "family") %>%
+  left_join(Amni_gen, by = "genus") %>%
+  mutate(DB_gen = replace_na(DB_gen, "NO"), DB_fam = replace_na(DB_fam, "NO")) %>%
+  filter(pos_num >= 2 & neg_num >= 2)
 
-species_order <- c("Gallus gallus", "Homo sapiens", "Rattus norvegicus", "Myotis lucifugus",
-                   "Pteropus vampyrus","Sus scrofa", "Ovis aries", "Bos taurus",
-                   "Equus caballus", "Canis lupus")
+ISG_meta_nonref_many <- ISG_meta_nonref %>%
+  filter(species %in% include_list$species)
 
-salmon_data$species <- factor(salmon_data$species, levels = species_order)
-# Induction も Positive → Negative の順に
-salmon_data$Induction <- factor(salmon_data$Induction, levels = c("Positive", "Negative"))
 
-salmon_data_mod <- salmon_data %>%
-  mutate(gene_group = case_when(
-    hum_symbol %in% c("HLA-A","HLA-B","HLA-C","HLA-E","HLA-F","HLA-G") ~ "HLA",
-    hum_symbol == "EIF2AK2" ~ "EIF2AK2",
-    hum_symbol == "RNF19B" ~ "RNF19B",
-    TRUE ~ "Normal"
+PRJNA816878_meta <- read.table("filereport_read_run_PRJNA816878_tsv.txt", header = T, sep = "\t") %>%
+  mutate(exp_inf = case_when(
+    str_detect(sample_alias, regex("healthy", ignore_case = TRUE)) ~ "Negative",
+    str_detect(sample_alias, regex("RSV", ignore_case = TRUE)) ~ "Positive",
+    TRUE ~ NA_character_ 
   )) %>%
-  filter(species == "Rattus norvegicus")
+  mutate(tissue = case_when(
+    str_detect(sample_alias, regex("intestin", ignore_case = TRUE)) ~ "Intestin",
+    str_detect(sample_alias, regex("lung", ignore_case = TRUE)) ~ "Lung",
+    str_detect(sample_alias, regex("kidney", ignore_case = TRUE)) ~ "kidney",
+    str_detect(sample_alias, regex("heart", ignore_case = TRUE)) ~ "heart",
+    str_detect(sample_alias, regex("spleen", ignore_case = TRUE)) ~ "spleen",
+    TRUE ~ NA_character_  
+  )) %>%
+  select(run_accession, exp_inf, tissue) %>%
+  rename(ID = run_accession)
 
-color_values <- c(
-  "Normal"   = "grey20",
-  "HLA"      = "#D55E00",  # vermillion
-  "EIF2AK2"  = "#0072B2",  # blue
-  "RNF19B"   = "#009E73"   # green
-)
+PRJNA816878 <- ISG_meta %>%
+  filter(BioProject_ID == "PRJNA816878") %>%
+  inner_join(PRJNA816878_meta, by = "ID")  %>%
+  mutate(species = if_else(species == "Sigmodon_fulviventer",
+                           "Sigmodon_fulviventer_RSV",
+                           species)) %>%
+  mutate(species = if_else(species == "Sigmodon_hispidus",
+                           "Sigmodon_hispidus_RSV",
+                           species)) %>%
+  mutate(ISG_DB = "Family") 
 
-salmon_data_mod <- salmon_data_mod %>%
-  mutate(gene_group = factor(gene_group,
-                             levels = c("Normal","HLA","EIF2AK2","RNF19B")))
-
-scatter_plot_mod <- ggplot() +
-  geom_point(
-    data = salmon_data_mod %>% filter(gene_group == "Normal"),
-    aes(x = RPM_mean, y = sal_mean),
-    color = "grey50", alpha = 0.5, size = 2
-  ) +
-  geom_point(
-    data = salmon_data_mod %>% filter(gene_group != "Normal"),
-    aes(x = RPM_mean, y = sal_mean, color = gene_group),
-    size = 2
-  ) +
-  geom_smooth(
-    data = salmon_data_mod %>% filter(gene_group == "Normal"),
-    aes(x = RPM_mean, y = sal_mean),
-    method = "lm",
-    se = FALSE,
-    color = "black"
-  ) +
-  scale_color_manual(values = color_values) +
-  coord_cartesian(xlim = c(0, 15), ylim = c(0, 20)) +
-  facet_grid(rows = vars(Induction), cols = vars(species)) +
-  theme_classic() +
+ggplot(PRJNA816878, aes(x = exp_inf, y = ISG_mean, fill = exp_inf)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.2, alpha = 0.4) +
+  facet_grid(Host_species ~ tissue) +
+  scale_fill_manual(values = c("Negative" = "#0072B2", "Positive" = "#E69F00")) +
+  theme_bw(base_size = 11) +
   labs(
-    title = "Scatter plot: STAR_log2_RPM_mean vs. salmon_normalized_count_mean",
-    x = "STAR_log2_RPM_mean",
-    y = "salmon_normalized_count_mean"
+    title = "ISG_mean by Infection Status, PRJNA816878",
+    x = "Infection Status",
+    y = "ISG_mean"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+#chrolocebus
+PRJNA396021_meta <- read.table("filereport_read_run_PRJNA396021.tsv", header = T, sep = "\t") %>%
+  mutate(exp_inf = case_when(
+    str_detect(sample_title, regex("Uninfected", ignore_case = TRUE)) ~ "Negative",
+    str_detect(sample_title, regex("negative", ignore_case = TRUE)) ~ "Negative",
+    str_detect(sample_title, regex("positive", ignore_case = TRUE)) ~ "Positive",
+    TRUE ~ NA_character_   
+  )) %>%
+  select(run_accession, exp_inf, library_strategy) %>%
+  rename(ID = run_accession)
+
+PRJNA396021 <- ISG_meta %>%
+  filter(BioProject_ID == "PRJNA396021") %>%
+  inner_join(PRJNA396021_meta, by = "ID")  %>%
+  mutate(species = if_else(species == "Chlorocebus_aethiops",
+                           "Chlorocebus_aethiops_HSV",
+                           species))  %>%
+  mutate(ISG_DB = "Genus")
+
+ggplot(PRJNA396021, aes(x = exp_inf, y = ISG_mean, fill = exp_inf)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.2, alpha = 0.4) +
+  facet_wrap(~ species) +
+  scale_fill_manual(values = c("Negative" = "#0072B2", "Positive" = "#E69F00")) +
+  theme_bw(base_size = 11) +
+  labs(
+    title = "ISG_mean by Infection Status, PRJNA981676",
+    x = "Infection Status",
+    y = "ISG_mean"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
   )
 
 
-print(scatter_plot_mod)
+#chrolocebus
+PRJNA668354_meta <- read.table("filereport_read_run_PRJNA668354.tsv", header = T, sep = "\t") %>%
+  mutate(exp_inf = case_when(
+    str_detect(sample_title, regex("day 0", ignore_case = TRUE)) ~ "Negative",
+    str_detect(sample_title, regex("day 1", ignore_case = TRUE)) ~ "Positive",
+    str_detect(sample_title, regex("day 2", ignore_case = TRUE)) ~ "Positive",
+    TRUE ~ NA_character_   
+  )) %>%
+  select(run_accession, exp_inf, library_strategy) %>%
+  rename(ID = run_accession)
 
+PRJNA668354 <- ISG_meta %>%
+  filter(BioProject_ID == "PRJNA668354") %>%
+  inner_join(PRJNA668354_meta, by = "ID") %>%
+  mutate(species = if_else(species == "Chlorocebus_aethiops",
+                                  "Chlorocebus_aethiops_SCV2",
+                                  species)) %>%
+  mutate(ISG_DB = "Genus")
+
+ggplot(PRJNA668354, aes(x = exp_inf, y = ISG_mean, fill = exp_inf)) +
+  geom_boxplot(alpha = 0.8, outlier.shape = NA) +
+  geom_jitter(width = 0.2, size = 1.2, alpha = 0.4) +
+  facet_wrap(~ species) +
+  scale_fill_manual(values = c("Negative" = "#0072B2", "Positive" = "#E69F00")) +
+  theme_bw(base_size = 11) +
+  labs(
+    title = "ISG_mean by Infection Status, PRJNA981676",
+    x = "Infection Status",
+    y = "ISG_mean"
+  ) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+PRJNA816878_mod <- PRJNA816878 %>%
+  select(-tissue)
+
+PRJNA668354_mod <- PRJNA668354 %>%
+  select(-library_strategy)
+
+PRJNA396021_mod <- PRJNA396021 %>%
+  select(-library_strategy)
+
+
+ISG_PRJ_comb <- rbind(PRJNA816878_mod, PRJNA668354_mod, PRJNA396021_mod) %>%
+  filter(!is.na(species))
+
+ISG_PRJ_comb_mod <- ISG_PRJ_comb %>%
+  ungroup() %>%
+  group_by(ID, BioProject_ID, tax_id, kingdom, phylum, class, order, family, genus, species, Host_species, exp_inf, ISG_DB) %>%
+  summarise(mean_ISG = mean(ISG_mean))
+
+#write.table(ISG_PRJ_comb_mod, "Experimental_infection_noISGDB.txt", row.names = F, sep = "\t", quote = F)
+
+wilcox_results <- ISG_PRJ_comb_mod %>%
+  group_by(species) %>%
+  summarise(
+    p_value = wilcox.test(mean_ISG ~ exp_inf)$p.value,
+    .groups = "drop"
+  )
+
+library(ggpubr)
+ISG_DB_list <- ISG_PRJ_comb_mod %>%
+  ungroup() %>%
+  select(species, ISG_DB) %>%
+  unique()
+
+# 1列のheatmapとして描画
+heat_annot <- ggplot(ISG_DB_list, aes(x = species, y = 1, fill = ISG_DB)) +
+  geom_tile(color = "white") +
+  scale_fill_manual(values = c("Genus" = "darkgreen", "Family" = "orange")) +
+  theme_void() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    plot.margin = margin(0, 5, 0, 5)
+  ) +
+  labs(fill = "ISG_DB Level")
+
+score_box <- ggplot(ISG_PRJ_comb_mod, aes(x = exp_inf, y = mean_ISG, fill = exp_inf)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5) +  
+  geom_jitter(aes(color = exp_inf), shape = 21, color = "black", width = 0.2, alpha = 1.0, size = 1.5) +  
+  stat_compare_means(aes(group = exp_inf), method = "t.test", label = "p.signif") +
+  facet_grid(. ~ species) +
+  xlab("") +
+  ylab("Z-score of normalized reads count") +
+  labs(color="condition", fill = "Infection") +
+  theme_classic() +
+  scale_x_discrete(limit = c("Negative", "Positive")) +
+  scale_fill_manual(values = c("Positive" = "#E41A1C", "Negative" = "#377EB8")) +
+  scale_x_discrete(
+    limits = c("Negative", "Positive"),
+    labels = c("Negative" = "-", "Positive" = "+")
+  )
+
+final_box <-  score_box + heat_annot +
+  plot_layout(heights = c(8, 1), guides = "collect")
+plot(final_box)
+
+score_box
 output_dir <- "."
-scatter_plot_mod_file_name <- paste0(output_dir, "/", "outlier_240801rat_260218.pdf")
-#ggsave(scatter_plot_mod_file_name, plot = scatter_plot_mod, width = 2.7, height = 3)
-
-
-#make a scatter plot; star (with references) vs other methods (with custom DB)
-
-ISG_reads_sp_mean_mod.list <- ISGcntl_sal_RPM %>%
-  dplyr::select(-sum_kallisto, -sum_kma, -sum_salmon, -sum_star_ort, -sum_bowtie) %>%
-  pivot_longer(cols = c(norm_kallisto, norm_kma, norm_salmon, norm_star_ort, norm_bowtie), names_to = "method", values_to = "norm_reads") %>%
-  filter(type == "ISG")
-
-ISG_reads_sp_mean_mod2.list <- ISG_reads_sp_mean_mod.list %>%
-  mutate(Species = species) %>%
-  unite(col=sp_con, Species, Induction, sep = "_")
-
-ISG_reads_sp_mean_mod22.list <- ISG_reads_sp_mean_mod2.list %>%
-  mutate(reads_log = log10(norm_reads*(10E+5)+1))
-
-
-#get outlier information
-ISG_reads_sp_mean_mod3.list <- ISG_reads_sp_mean_mod22.list %>%
-  unite(col=sp_con_met, sp_con, method, sep = "_") %>%
-  ungroup()
-row_s.line <- length(unique(ISG_reads_sp_mean_mod3.list$sp_con_met))
-outlier.list <- data.frame()
-outlier_hs.list <- data.frame()
-for (i in 1:row_s.line) {
-  Species <- unique(ISG_reads_sp_mean_mod3.list$sp_con_met)[i]
-  sample.i <- ISG_reads_sp_mean_mod3.list %>%
-    dplyr::filter(sp_con_met == Species)
-  sample.filt <- sample.i %>%
-    filter(RPM_log >= 1) 
-  x = sample.filt$RPM_log
-  y = sample.filt$reads_log
-  sample.out <- sample.filt %>%
-    mutate(hatval_lm = hatvalues(lm(y ~ x)))
-  sample.out <- sample.out %>%
-    mutate(hatval_rlm = hatvalues(rlm(y ~ x)))
-  influence <- lm.influence(lm(y ~ x))
-  cooks_d <- cooks.distance(lm(y ~ x))
-  leverage <- influence$hat
-  sample.out$CooksD <- cooks_d
-  sample.out$Leverage <- leverage
-  sample.out$StudentizedResiduals <- studres(lm(y ~ x))
-  robust_cov <- cov.rob(sample.out[, c("reads_log", "RPM_log")])
-  
-  ModelLM <- lm(y ~ x, data = sample.filt)
-  fitted_intercept <- coef(ModelLM)[1]
-  fitted_slope <- coef(ModelLM)[2]
-  sample.out$finterc <- fitted_intercept
-  sample.out$fslope <- fitted_slope
-  
-  # Mahalanobis距離の計算
-  mahal_dist <- mahalanobis(sample.out[, c("reads_log", "RPM_log")], center = robust_cov$center, cov = robust_cov$cov)
-  sample.out$MahalanobisDistance <- mahal_dist
-  sample.out <- sample.out %>%
-    dplyr::select(hum_symbol, hatval_lm, hatval_rlm, CooksD, Leverage, StudentizedResiduals, MahalanobisDistance, finterc, fslope)
-  
-  sample.i <- sample.i %>%
-    left_join(sample.out, by = "hum_symbol")
-  outlier_hs.list <- rbind(outlier_hs.list, sample.i)
-  
-}
-
-outlier_mod.list <- outlier_hs.list %>%
-  dplyr::select(hum_symbol, hatval_lm, hatval_rlm, sp_con_met, CooksD, Leverage, StudentizedResiduals, MahalanobisDistance, finterc, fslope) %>%
-  dplyr::mutate(sp_con_met=gsub(sp_con_met,pattern="star_ort",replacement = "starort", ignore.case = TRUE)) %>%
-  separate(col = sp_con_met, into = c("species", "condition", "norm", "met"), sep = "_") %>%
-  unite(col= sp_con, species, condition, sep="_") %>%
-  unite(col= method, norm, met, sep="_")
-
-sal_out <- outlier_mod.list %>% filter(method == "norm_salmon") %>% group_by(hum_symbol) %>% summarise(stre_mean = mean(StudentizedResiduals, na.rm = TRUE ))
+file_name <- paste0(output_dir, "/", "noISGDB_expinf_boxplot_251224.pdf")
+#ggsave(file_name, plot = score_box, width = 5, height = 5)
