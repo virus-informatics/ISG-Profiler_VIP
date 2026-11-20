@@ -3,14 +3,16 @@
 #$ -pe def_slot 8
 #$ -l lmem
 #$ -l s_vmem=60G,mem_req=60G
-#$ -o /home/kyokok/projects/2507blastx/log/251111
-#$ -e /home/kyokok/projects/2507blastx/log/251111
+#$ -o .
+#$ -e .
+# Fig. 4A–D: Discovery of novel viruses from the 41k RNA-seq data set
+# Run BLASTn on the HPC for contigs exported by `Fig4_table.ipynb`.
+# Return the results before resuming the notebook.
 
-# change directory
-base_path="/home/kyokok/projects/2507blastx"
+base_path="/path/to/project"
 cd ${base_path}
 
-# commands
+# Run BLASTn
 module load /usr/local/package/modulefiles/blast+/2.15.0
 
 blastn -query ${base_path}/data/251111_external/virus_hit_all_contigs.fasta \

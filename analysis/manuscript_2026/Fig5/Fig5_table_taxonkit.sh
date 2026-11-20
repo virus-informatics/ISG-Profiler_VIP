@@ -1,7 +1,11 @@
-conda activate taxonkit
+# Fig. 5: Detection of previously overlooked viral infections and flagging of non-genuine detections
+# Add taxonomy to BLASTx top hits from `Fig5_table.ipynb`; then resume the notebook.
 
-path_out=/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/projects/2507blastx/output/250909_4474_samples/final_test/
-db_path=/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/db/taxdmp
+basedir="/path/to/project"
+
+
+path_out="$basedir/output/revise_final/Fig5/"
+db_path="$basedir/../../db/taxdmp"
 
 cd "$path_out"
 

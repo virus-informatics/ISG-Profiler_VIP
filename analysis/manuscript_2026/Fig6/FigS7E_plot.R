@@ -1,25 +1,32 @@
-library(ComplexHeatmap)
-library(circlize)
-library(tidyverse)　## 
-grid::unit
+# Fig. S7E: Expression changes of representative genes for each GSEA term shown in Fig. S7D
+# Plot representative-gene expression and membership tables prepared by `FigS7E_table.ipynb`.
 
-gs.interest.v <- c("Interferon Alpha Response",
+library(circlize)
+library(tidyverse)
+library(patchwork)
+
+gs.interest.v <- c("WIELAND_UP_BY_HBV_INFECTION",
+                   "Interferon Alpha Response",
                    "IL_6/JAK/STAT3 Signaling",
                    "Xenobiotic Metabolism",
                    "Adipogenesis")
 
 project_Id.v <- c("PRJNA774885","PRJEB63475")
 
+# Define paths
+basedir <- "/path/to/project"
 
-# change working directory
-setwd("/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/projects/2507blastx/output/250909_4474_samples/final_test/hepatovirus_260113_MSigDB_Hallmark_2020_stat/heatmap_hepatovirus/")
+output_dir <- file.path(basedir, "output/revise_final/FigS7E")
+input_dir <- output_dir
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+setwd(output_dir)
 
-# read tables
-mat_df  <- read.csv("gene_project_log2FC_matrix.csv", row.names = 1, check.names = FALSE)
-term_bin_df <- read.csv("term_anno.csv", row.names = 1, check.names = FALSE)
+# Read the input tables
+mat_df  <- read.csv(file.path(input_dir, "gene_project_log2FC_matrix.csv"), row.names = 1, check.names = FALSE)
+term_bin_df <- read.csv(file.path(input_dir, "term_anno.csv"), row.names = 1, check.names = FALSE)
 
 mat_df.long <- mat_df %>% mutate(symbol = rownames(mat_df)) %>% gather(key = project_Id, value = log2FC, -symbol)
-term_bin_df.long <- term_bin_df %>% mutate(symbol = rownames(mat_df)) %>% gather(key = gs, value = membership, -symbol) %>% filter(membership == 1)
+term_bin_df.long <- term_bin_df %>% mutate(symbol = rownames(term_bin_df)) %>% gather(key = gs, value = membership, -symbol) %>% filter(membership == 1)
 
 term_bin_df.long <- term_bin_df.long %>% filter(gs %in% gs.interest.v) %>% mutate(gs = factor(gs, levels = gs.interest.v)) %>% arrange(gs, symbol)
 
@@ -29,7 +36,7 @@ term_bin_df.long <- term_bin_df.long %>% mutate(symbol = factor(symbol, levels =
 
 
 
-mat_df.long <- mat_df.long %>% filter(symbol %in% symbol_order.v) %>%
+mat_df.long <- mat_df.long %>% filter(symbol %in% symbol_order.v, project_Id %in% project_Id.v) %>%
   mutate(symbol = factor(symbol, levels = rev(symbol_order.v)),
          project_Id = factor(project_Id, levels = project_Id.v))
 
@@ -67,6 +74,10 @@ g2 <- ggplot(term_bin_df.long, aes(x = gs, y = symbol, fill = membership)) +
     panel.grid.minor = element_blank()
   )
 
-pdf("stat_log2FC_heatmap.pdf", width = 6, height = 6)
-g1 + g2
+# Allow space for gene rows and the vertical term labels (sizes in inches).
+plot_width <- 5.0 + 0.25 * n_distinct(mat_df.long$project_Id)
+plot_height <- max(5.0, 2.8 + 0.18 * length(symbol_order.v))
+
+pdf("stat_log2FC_heatmap.pdf", width = plot_width, height = plot_height)
+print(g1 + g2)
 dev.off()

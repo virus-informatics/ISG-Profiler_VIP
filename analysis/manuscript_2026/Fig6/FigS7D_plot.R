@@ -1,30 +1,36 @@
+# Fig. S7D: Gene expression changes associated with Hepatovirus infection in chicken liver samples, assessed by GSEA
+# Plot the GSEA summary produced by `FigS7D_GSEA.ipynb`.
+
 library(readr)
 library(dplyr)
-library(tidyr)
 library(ggplot2)
 library(scales)
 
-# change working directory
-setwd("/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/projects/2507blastx/output/250909_4474_samples/final_test/hepatovirus_260113_MSigDB_Hallmark_2020_stat/dotplot_hepatovirus/")
+# Define paths
+basedir <- "/path/to/project"
 
-# read table
-df_all <- read_csv("NES_termshared_top10_FDR05.csv") |>
+output_dir <- file.path(basedir, "output/revise_final/FigS7D")
+dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
+setwd(output_dir)
+
+# Read the GSEA results
+input_dir <- file.path(output_dir, "gsea")
+input_file <- file.path(input_dir, "NES_top10_FDR05.csv")
+
+df_all <- read_csv(input_file) |>
   mutate(
     Term = gsub("-", "_", Term),
     sig  = if_else(`FDR q-val` < 0.05, "FDR < 0.05", "ns"),
     sig  = factor(sig, levels = c("FDR < 0.05", "ns"))
   )
 
-# term order
+# Set the term order
 term_levels <- df_all |>
   distinct(Term) |>
   pull(Term)
 
-# project order
-project_levels <- df_all |>
-  distinct(Project) |>
-  pull(Project)
-# project_levels <- c("p1","p2","p3")
+# Set the project order
+project_levels <- c("PRJNA774885", "PRJEB63475")
 
 df_all <- df_all |>
   mutate(
@@ -32,8 +38,7 @@ df_all <- df_all |>
     Project = factor(Project, levels = project_levels)
   )
 
-# global_size_max <- max(abs(df_all$mlog10_fdr), na.rm = TRUE)
-global_size_max <- 10  # aligned with chapama
+global_size_max <- max(abs(df_all$mlog10_fdr), na.rm = TRUE)
 
 p <- ggplot(df_all, aes(
   x = Project, y = Term,
@@ -44,7 +49,7 @@ p <- ggplot(df_all, aes(
   geom_point(shape = 21, stroke = 0.6) +
   scale_fill_gradient2(
     low = "#2166AC", mid = "#F7F7F7", high = "#B2182B",
-    midpoint = 0, limits = c(-3, 3), oob = squish, name = "NES"
+    midpoint = 0, limits = c(-3, 3), breaks = -3:3, oob = squish, name = "NES"
   ) +
   scale_size_continuous(
     limits = c(0, global_size_max),
@@ -60,16 +65,19 @@ p <- ggplot(df_all, aes(
   labs(x = NULL, y = NULL) +
   theme_classic() +
   theme(
-    axis.text.x = element_text(color = "black", angle = 45, hjust = 1, vjust = 1),
+    axis.text.x = element_text(color = "black", angle = 90, hjust = 1, vjust = 1),
     axis.text.y = element_text(color = "black"),
     legend.title = element_text(size = 9),
     legend.text  = element_text(size = 8),
     plot.margin = margin(5, 5, 5, 5),
-    panel.grid.major = element_line(linewidth = 0.3),  # TODO
-    panel.grid.minor = element_line(linewidth = 0.3)  # TODO
+    panel.grid.major = element_line(linewidth = 0.3),
+    panel.grid.minor = element_line(linewidth = 0.3)
   ) +
   guides(
     fill = guide_colorbar(barheight = unit(20, "mm"), barwidth = unit(4, "mm"))
   )
 
-ggsave("stat_dotplot_1panel_hepatovirus.pdf", p, width = 4, height = 4.2, units = "in")
+
+# Save the figure
+print(p)
+ggsave("stat_dotplot_hepatovirus_1panel.pdf", p, width = 4.1, height = 7.0, units = "in")

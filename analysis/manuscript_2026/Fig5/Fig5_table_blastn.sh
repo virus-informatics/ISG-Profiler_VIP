@@ -3,14 +3,16 @@
 #$ -pe def_slot 8
 #$ -l lmem
 #$ -l s_vmem=60G,mem_req=60G
-#$ -o /home/kyokok/projects/2507blastx/log/250909
-#$ -e /home/kyokok/projects/2507blastx/log/250909
+#$ -o .
+#$ -e .
+# Fig. 5: Detection of previously overlooked viral infections and flagging of non-genuine detections
+# Run BLASTn on the HPC for contigs exported by `Fig5_table.ipynb`.
+# Return the results before resuming the notebook.
 
-# change directory
-base_path="/home/kyokok/projects/2507blastx"
+base_path="/path/to/project"
 cd ${base_path}
 
-# commands
+# Run BLASTn
 module load /usr/local/package/modulefiles/blast+/2.15.0
 
 blastn -query ${base_path}/data/250909_virus_hit/virus_hit_all_contigs.fasta \

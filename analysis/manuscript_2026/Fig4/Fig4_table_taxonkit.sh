@@ -1,7 +1,11 @@
-conda activate taxonkit
+# Fig. 4A–D: Discovery of novel viruses from the 41k RNA-seq data set
+# Add taxonomy to BLASTx top hits from `Fig4_table.ipynb`; then resume the notebook.
 
-path_out=/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/projects/2507blastx/output/251111_3921_samples_external_final_test/
-db_path=/Users/kyokokurihara/iLab/itolab_backup/backup-latest/Lab/db/taxdmp
+basedir="/path/to/project"
+
+
+path_out="$basedir/output/revise_final/Fig4/"
+db_path="$basedir/../../db/taxdmp"
 
 cd "$path_out"
 
